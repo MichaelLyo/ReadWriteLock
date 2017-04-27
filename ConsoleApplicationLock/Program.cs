@@ -200,10 +200,13 @@ namespace ConsoleApplicationLock
         {
             if (HasReadLock())
                 return writeThreadCounts.ContainOtherThreads();
+
             else
                 return false;
         }
 
+
+        // 允许同时读，不允许读同时写
         private bool TryLockRead()
         {
             bool temp = HasOtherThreadWriteLock();
@@ -213,6 +216,7 @@ namespace ConsoleApplicationLock
 
         }
 
+        //不允许同时写，也不允许读同时写
         private bool TryLockWrite()
         {
             bool temp = HasOtherThreadReadLock();
@@ -236,6 +240,8 @@ namespace ConsoleApplicationLock
                 }
                 return true;
             };
+
+            // 为保证线程安全，所有的操作都应通过WaitForTime执行
             rwLock.WaitForTime(TimeSpan.MaxValue, ul);
         }
 
@@ -266,7 +272,7 @@ namespace ConsoleApplicationLock
                 {
                     bool isvalid = isvalidstate != null ? isvalidstate() : true;
                     if (isvalid)
-                        state = MutilThreadDisposeStatePools.GetMutilThreadDisposeState(true, true, this);
+                        state = MutilThreadDisposeStatePools.GetMutilThreadDisposeState(isvalid, false, this);
                     return true;
                 }
                 else
@@ -736,7 +742,7 @@ namespace ConsoleApplicationLock
 
         static void Main(string[] args)
         {
-            int threadNum = 25;
+            int threadNum = 20;
 
 
             Thread[] threadreads = new Thread[threadNum];
@@ -749,14 +755,14 @@ namespace ConsoleApplicationLock
                 threadwrites[i] = new Thread(TestWrite);
             }
 
-            for(int i=0; i<threadNum;i++)
+            for (int i = 0; i < threadNum; i++)
             {
                 threadreads[i].Start();
                 threadwrites[i].Start();
             }
 
             //Thread[] threads = new Thread[threadNum];
-            //for(int i=0;i< threadNum; i++)
+            //for (int i = 0; i < threadNum; i++)
             //{
             //    threads[i] = new Thread(Test);
             //}
