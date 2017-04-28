@@ -22,7 +22,7 @@ namespace ConsoleApplicationLock
     {
         public ThreadCountCollection()
         {
-            threadCounts = new Dictionary<int,int>();
+            threadCounts = new Dictionary<int, int>();
         }
 
         private Dictionary<int, int> threadCounts;
@@ -114,7 +114,7 @@ namespace ConsoleApplicationLock
         }
 
         private bool isValid;
-        
+
         public bool IsValid { get { return isValid; } }
 
         internal static readonly DisposeState Empty;
@@ -188,7 +188,7 @@ namespace ConsoleApplicationLock
 
         private bool HasOtherThreadWriteLock()
         {
-            if (HasReadLock())
+            if (HasWriteLock())
                 return writeThreadCounts.ContainOtherThreads();
 
             else
@@ -210,8 +210,6 @@ namespace ConsoleApplicationLock
         private bool TryLockWrite()
         {
             bool temp = HasOtherThreadWriteLock();
-            //if (!temp)
-            //    temp = HasOtherThreadWriteLock();
             if (!temp)
                 writeThreadCounts.AddThreadCount();
             return !temp;
@@ -263,7 +261,7 @@ namespace ConsoleApplicationLock
                     bool isvalid = isvalidstate != null ? isvalidstate() : true;
                     if (isvalid)
                         state = new MutiThreadDisposeState(isvalid, false, this);
-                        //state = MutilThreadDisposeStatePools.GetMutilThreadDisposeState(isvalid, false, this);
+                   
                     return true;
                 }
                 else
@@ -374,7 +372,6 @@ namespace ConsoleApplicationLock
         {
             if (owner != null)
                 owner.UnLock(this);
-            //MutilThreadDisposeStatePools.MutilThreadDisposeStateToBuffer(this);
         }
 
 
@@ -389,91 +386,14 @@ namespace ConsoleApplicationLock
 
     }
 
-    #region 状态池（废弃）
-    // 存储所有线程中锁的状态，全局唯一
-    //internal class MutilThreadDisposeStatePools
-    //{
-    //    static MutilThreadDisposeStatePools()
-    //    {
-    //        global = new MutilThreadDisposeStatePools();
 
-    //    }
-
-    //    public MutilThreadDisposeStatePools()
-    //    {
-    //        buffers = new List<MutiThreadDisposeState>();
-    //    }
-
-    //    private List<MutiThreadDisposeState> buffers;
-
-    //    private static MutilThreadDisposeStatePools global;
-
-
-    //    internal MutiThreadDisposeState GetState(
-    //      bool isvalid, bool iswritelock, MutilThreadReadWriterLock owner)
-    //    {
-    //        lock (buffers)
-    //        {
-    //            if (buffers.Count > 0)
-    //            {
-    //                MutiThreadDisposeState x = buffers[0];
-    //                x.Reset(isvalid, iswritelock, owner);
-    //                buffers.RemoveAt(0);
-    //                return x;
-    //            }
-    //            else
-    //            {
-    //                MutiThreadDisposeState x = new MutiThreadDisposeState();
-    //                x.Reset(isvalid, iswritelock, owner);
-    //                return x;
-    //            }
-    //        }
-    //    }
-
-    //    internal void ToBuffer(MutiThreadDisposeState b)
-    //    {
-    //        lock (buffers)
-    //        {
-    //            b.Reset(false, false, null);
-    //            buffers.Add(b);
-    //        }
-    //    }
-
-    //    internal void ClearBuffer()
-    //    {
-    //        lock (buffers)
-    //        {
-    //            buffers.Clear();
-    //        }
-    //    }
-
-
-    //    internal static MutiThreadDisposeState GetMutilThreadDisposeState(
-    //        bool isvalid, bool iswritelock, MutilThreadReadWriterLock owner)
-    //    {
-    //        return global.GetState(isvalid, iswritelock, owner);
-    //    }
-
-    //    internal static void MutilThreadDisposeStateToBuffer(MutiThreadDisposeState state)
-    //    {
-    //        global.ToBuffer(state);
-    //    }
-
-    //    internal static void ClearGobalBuffer()
-    //    {
-    //        global.ClearBuffer();
-    //    }
-
-    //}
-
-    #endregion
 
     // 让函数可以随机等待一段时间后再去执行
     // 并且在操作条件不满足时，等一段时间后再次执行
     // 直到执行完毕或者超时跳过
     public sealed class TimeSpanWaitor
     {
-        public TimeSpanWaitor(int min,int max)
+        public TimeSpanWaitor(int min, int max)
         {
             asyncObject = new IntLock();
             waitTimeRandom = new Random();
@@ -483,13 +403,13 @@ namespace ConsoleApplicationLock
                 tmin = 10;
             if (tmax < 0)
                 tmax = 100;
-            if(tmin>tmax)
+            if (tmin > tmax)
             {
                 int temp = tmax;
                 tmax = tmin;
                 tmin = temp;
             }
-            if(tmin==tmax)
+            if (tmin == tmax)
             {
                 tmin = 10;
                 tmax = 100;
@@ -499,7 +419,7 @@ namespace ConsoleApplicationLock
 
         }
 
-        public TimeSpanWaitor():this(DefaultMinWaitTimeMillSeconds, DefaultMaxWaitTimeMillSeconds) { }
+        public TimeSpanWaitor() : this(DefaultMinWaitTimeMillSeconds, DefaultMaxWaitTimeMillSeconds) { }
 
         public const int DefaultMaxWaitTimeMillSeconds = 100;
 
@@ -518,34 +438,12 @@ namespace ConsoleApplicationLock
         private PerWaitNum TryEnter(Func<bool> onEnter)
         {
             bool success = asyncObject.Lock();
-            if(success)
+            if (success)
             {
                 PerWaitNum r = PerWaitNum.SuccessAndContinue;
-                //Exception err = null;
                 if (onEnter())
                     r = PerWaitNum.SuccessAndExits;
                 asyncObject.UnLock();
-
-                #region 添加异常处理
-                //try
-                //{
-                //    if (onEnter())
-                //        r = PerWaitNum.SuccessAndExits;
-
-                //}
-                //catch(Exception e)
-                //{
-                //    err = e;
-                //}
-                //finally
-                //{
-                //    asyncObject.UnLock();
-                //}
-                //if (err != null)
-                //    throw err;
-
-                #endregion
-
                 return r;
             }
             return PerWaitNum.Fail;
@@ -554,18 +452,18 @@ namespace ConsoleApplicationLock
 
         private bool WaitTime(ref TimeSpan waitTimeOut, ref DateTime dt)
         {
-            if(TimeSpan.MaxValue == waitTimeOut)
+            if (TimeSpan.MaxValue == waitTimeOut)
             {
                 Thread.Sleep(waitTimeRandom.Next(minWaitMillSeconds, maxWaitMillSeconds));
                 dt = DateTime.Now;
                 return true;
             }
-            else if(TimeSpan.MinValue==waitTimeOut)
+            else if (TimeSpan.MinValue == waitTimeOut)
             {
                 dt = DateTime.Now;
                 return false;
             }
-            else if (waitTimeOut==TimeSpan.Zero)
+            else if (waitTimeOut == TimeSpan.Zero)
             {
                 dt = DateTime.Now;
                 return false;
@@ -592,9 +490,9 @@ namespace ConsoleApplicationLock
             var temp = timeout;
             DateTime nowTime = DateTime.Now;
             PerWaitNum type = TryEnter(onEnter);
-            while(type != PerWaitNum.SuccessAndExits)
+            while (type != PerWaitNum.SuccessAndExits)
             {
-                if(!WaitTime(ref timeout, ref nowTime))
+                if (!WaitTime(ref timeout, ref nowTime))
                 {
                     break;
                 }
@@ -616,13 +514,13 @@ namespace ConsoleApplicationLock
 
         public bool Lock()
         {
-            return Interlocked.CompareExchange(ref radom, 1, 0)==0;
+            return Interlocked.CompareExchange(ref radom, 1, 0) == 0;
         }
-        
+
 
         public bool UnLock()
         {
-            return Interlocked.CompareExchange(ref radom, 0, 1)==1;
+            return Interlocked.CompareExchange(ref radom, 0, 1) == 1;
         }
     }
 
@@ -634,7 +532,7 @@ namespace ConsoleApplicationLock
         SuccessAndContinue,
         Fail
     }
-    
+
 
 
     // 表示状态的一个接口
@@ -727,7 +625,7 @@ namespace ConsoleApplicationLock
 
         static void Main(string[] args)
         {
-            int threadNum = 50;
+            int threadNum = 25;
 
             Thread[] threadreads = new Thread[threadNum];
 
@@ -757,7 +655,7 @@ namespace ConsoleApplicationLock
             }
 
             Console.WriteLine();
-           
+
         }
     }
 }
