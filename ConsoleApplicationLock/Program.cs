@@ -2,68 +2,44 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Threading.Tasks;
 using System.Threading;
+using System.Collections;
+
+// 姓名：阚璇
+// 学号：1353202
+
+// 基本从0开始实现了读写锁功能（多线程读，单线程写），且写比读优先
+// 但是因为通过一个dictionary进行多线程之间信息的共享，效率还能够进一步提高
+// 除读写锁之外，理解了线程加锁时发生冲突的时候应该如何处理，但是这个方法是靠轮询实现的
+// 还想看一看官方是否有更高效的方法
 
 namespace ConsoleApplicationLock
 {
 
-    // 线程的存储类，Count对应加锁次数
-    internal class ThreadCount
-    {
-        public ThreadCount()
-        {
-            threadID = Thread.CurrentThread.ManagedThreadId;
-        }
-
-        private int threadID;
-
-        public int ThreadID
-        {
-            get { return threadID; }
-        }
-
-        private int count;
-
-        public int Count {
-            get { return count; }
-            set { count = value; }
-        }
-
-
-    }
-
-    // 线程对象的集合，可以获取当前线程并获取其他线程加锁信息
+    // 线程对象的集合，可以获取当前线程以及其他线程加锁信息
+    // 用字典存储 key 为线程id, value 为某种锁在改线程的添加次数
     internal class ThreadCountCollection
     {
         public ThreadCountCollection()
         {
-            threadCounts = new List<ThreadCount>();
+            threadCounts = new Dictionary<int,int>();
         }
 
-        private List<ThreadCount> threadCounts;
+        private Dictionary<int, int> threadCounts;
 
-
-        public ThreadCount GetCurrentThreadCount()
-        {
-            int id = Thread.CurrentThread.ManagedThreadId;
-            foreach(var i in threadCounts)
-            {
-                if (id == i.ThreadID)
-                    return i;
-            }
-            return null;
-        }
 
         public void RemoveThreadCount()
         {
-            var temp = GetCurrentThreadCount();
-            if(temp!=null)
+            int id = Thread.CurrentThread.ManagedThreadId;
+            lock (threadCounts)
             {
-                temp.Count--;
-                if(temp.Count<=0)
+                if (threadCounts.ContainsKey(id))
                 {
-                    threadCounts.Remove(temp);
+                    threadCounts[id]--;
+                    if (threadCounts[id] <= 0)
+                    {
+                        threadCounts.Remove(id);
+                    }
                 }
             }
 
@@ -71,28 +47,44 @@ namespace ConsoleApplicationLock
 
         public void AddThreadCount()
         {
-            var temp = GetCurrentThreadCount();
-            if(temp==null)
+            int id = Thread.CurrentThread.ManagedThreadId;
+            lock (threadCounts)
             {
-                threadCounts.Add(new ThreadCount { Count = 1 });
-            }
-            else
-            {
-                temp.Count++;
+                if (!threadCounts.ContainsKey(id))
+                {
+
+                    threadCounts.Add(Thread.CurrentThread.ManagedThreadId, 1);
+
+                }
+                else
+                {
+                    threadCounts[id]++;
+                }
             }
         }
 
         public int Count { get { return threadCounts.Count; } }
 
+
+        public bool HasCurrentThreadLock()
+        {
+            return threadCounts.ContainsKey(Thread.CurrentThread.ManagedThreadId);
+        }
+
         public bool ContainOtherThreads()
         {
             int id = Thread.CurrentThread.ManagedThreadId;
-            foreach(var i in threadCounts)
+            if (threadCounts.Count >= 2)
+                return true;
+            if (threadCounts.Count == 1)
             {
-                if (i.ThreadID != id)
-                    return true;
+                threadCounts.ContainsKey(id);
+                return false;
             }
-            return false;
+            else
+            {
+                return true;
+            }
         }
 
         public void CleanUp()
@@ -101,7 +93,8 @@ namespace ConsoleApplicationLock
         }
     }
 
-    // 
+    // 多线程中相关类的状态
+    // 并提供可用和不可用两种静态状态，方便后面为一些错误值赋值
     internal class DisposeState : IDisposeState
     {
         static DisposeState()
@@ -131,35 +124,32 @@ namespace ConsoleApplicationLock
         public void Dispose() { }
     }
 
-    //
+    // 锁的管理类 
+    // 通过两个全局唯一变量readThreadCounts writeThreadCounts
+    // 来对不同线程的锁进行管理
     public sealed class MutilThreadReadWriterLock : IDisposable
     {
         static MutilThreadReadWriterLock()
         {
-            EmptyNullDisposedState = DisposeState.Empty;
-            IsValidDisposedState = DisposeState.Valid;
+            // static 变量 
+            readThreadCounts = new ThreadCountCollection();
+            writeThreadCounts = new ThreadCountCollection();
         }
 
         public MutilThreadReadWriterLock()
         {
-            readThreadCounts = new ThreadCountCollection();
-            writeThreadCounts = new ThreadCountCollection();
             rwLock = new TimeSpanWaitor();
             dispose = false;
 
         }
 
-        #region Private
-
         private TimeSpanWaitor rwLock;
 
         private bool dispose;
 
-        private ThreadCountCollection readThreadCounts;
+        static private ThreadCountCollection readThreadCounts;
 
-        private ThreadCountCollection writeThreadCounts;
-
-        #endregion
+        static private ThreadCountCollection writeThreadCounts;
 
         public bool HasReadLock()
         {
@@ -169,7 +159,7 @@ namespace ConsoleApplicationLock
         public bool HasCurrentThreadReadLock()
         {
             if (HasReadLock())
-                return readThreadCounts.GetCurrentThreadCount() != null;
+                return readThreadCounts.HasCurrentThreadLock();
             else
                 return false;
         }
@@ -191,7 +181,7 @@ namespace ConsoleApplicationLock
         public bool HasCurrentThreadWriteLock()
         {
             if (HasWriteLock())
-                return writeThreadCounts.GetCurrentThreadCount() != null;
+                return writeThreadCounts.HasCurrentThreadLock();
             else
                 return false;
         }
@@ -216,12 +206,12 @@ namespace ConsoleApplicationLock
 
         }
 
-        //不允许同时写，也不允许读同时写
+        //不允许同时写，且写优先
         private bool TryLockWrite()
         {
-            bool temp = HasOtherThreadReadLock();
-            if (!temp)
-                temp = HasOtherThreadWriteLock();
+            bool temp = HasOtherThreadWriteLock();
+            //if (!temp)
+            //    temp = HasOtherThreadWriteLock();
             if (!temp)
                 writeThreadCounts.AddThreadCount();
             return !temp;
@@ -241,7 +231,7 @@ namespace ConsoleApplicationLock
                 return true;
             };
 
-            // 为保证线程安全，所有的操作都应通过WaitForTime执行
+            // 为保证线程安全，所有对锁的操作都应通过WaitForTime执行
             rwLock.WaitForTime(TimeSpan.MaxValue, ul);
         }
 
@@ -272,7 +262,8 @@ namespace ConsoleApplicationLock
                 {
                     bool isvalid = isvalidstate != null ? isvalidstate() : true;
                     if (isvalid)
-                        state = MutilThreadDisposeStatePools.GetMutilThreadDisposeState(isvalid, false, this);
+                        state = new MutiThreadDisposeState(isvalid, false, this);
+                        //state = MutilThreadDisposeStatePools.GetMutilThreadDisposeState(isvalid, false, this);
                     return true;
                 }
                 else
@@ -302,9 +293,7 @@ namespace ConsoleApplicationLock
                 {
                     bool isvalid = isvalidstate != null ? isvalidstate() : true;
                     if (isvalid)
-                        state =
-                            MutilThreadDisposeStatePools.GetMutilThreadDisposeState(
-                            isvalid, true, this);
+                        state = new MutiThreadDisposeState(isvalid, true, this);
                     else
                         state = DisposeState.Empty;
                     return true;
@@ -343,17 +332,6 @@ namespace ConsoleApplicationLock
             return rb;
         }
 
-        public bool HasLockWrite()
-        {
-            bool rb = false;
-            Func<bool> f = () =>
-            {
-                rb = HasWriteLock();
-                return true;
-            };
-            rwLock.WaitForTime(TimeSpan.MaxValue, f);
-            return rb;
-        }
 
         public void Dispose()
         {
@@ -365,9 +343,6 @@ namespace ConsoleApplicationLock
             rwLock.WaitForTime(TimeSpan.MaxValue, f);
         }
 
-        public static readonly IDisposeState EmptyNullDisposedState;
-
-        public static readonly IDisposeState IsValidDisposedState;
     }
 
 
@@ -379,6 +354,13 @@ namespace ConsoleApplicationLock
         private bool isWriteLock;
 
         private MutilThreadReadWriterLock owner;
+
+        public MutiThreadDisposeState(bool isvalid, bool iswritelock, MutilThreadReadWriterLock rwl)
+        {
+            isValid = isvalid;
+            isWriteLock = iswritelock;
+            owner = rwl;
+        }
 
 
 
@@ -392,7 +374,7 @@ namespace ConsoleApplicationLock
         {
             if (owner != null)
                 owner.UnLock(this);
-            MutilThreadDisposeStatePools.MutilThreadDisposeStateToBuffer(this);
+            //MutilThreadDisposeStatePools.MutilThreadDisposeStateToBuffer(this);
         }
 
 
@@ -407,91 +389,95 @@ namespace ConsoleApplicationLock
 
     }
 
-
+    #region 状态池（废弃）
     // 存储所有线程中锁的状态，全局唯一
-    internal class MutilThreadDisposeStatePools
-    {
-        static MutilThreadDisposeStatePools()
-        {
-            global = new MutilThreadDisposeStatePools();
+    //internal class MutilThreadDisposeStatePools
+    //{
+    //    static MutilThreadDisposeStatePools()
+    //    {
+    //        global = new MutilThreadDisposeStatePools();
 
-        }
+    //    }
 
-        public MutilThreadDisposeStatePools()
-        {
-            buffers = new List<MutiThreadDisposeState>();
-        }
+    //    public MutilThreadDisposeStatePools()
+    //    {
+    //        buffers = new List<MutiThreadDisposeState>();
+    //    }
 
-        private List<MutiThreadDisposeState> buffers;
+    //    private List<MutiThreadDisposeState> buffers;
 
-        private static MutilThreadDisposeStatePools global;
-
-
-        internal MutiThreadDisposeState GetState(
-          bool isvalid, bool iswritelock, MutilThreadReadWriterLock owner)
-        {
-            lock (buffers)
-            {
-                if (buffers.Count > 0)
-                {
-                    MutiThreadDisposeState x = buffers[0];
-                    x.Reset(isvalid, iswritelock, owner);
-                    buffers.RemoveAt(0);
-                    return x;
-                }
-                else
-                {
-                    MutiThreadDisposeState x = new MutiThreadDisposeState();
-                    x.Reset(isvalid, iswritelock, owner);
-                    return x;
-                }
-            }
-        }
-
-        internal void ToBuffer(MutiThreadDisposeState b)
-        {
-            lock (buffers)
-            {
-                b.Reset(false, false, null);
-                buffers.Add(b);
-            }
-        }
-
-        internal void ClearBuffer()
-        {
-            lock (buffers)
-            {
-                buffers.Clear();
-            }
-        }
+    //    private static MutilThreadDisposeStatePools global;
 
 
-        internal static MutiThreadDisposeState GetMutilThreadDisposeState(
-            bool isvalid, bool iswritelock, MutilThreadReadWriterLock owner)
-        {
-            return global.GetState(isvalid, iswritelock, owner);
-        }
+    //    internal MutiThreadDisposeState GetState(
+    //      bool isvalid, bool iswritelock, MutilThreadReadWriterLock owner)
+    //    {
+    //        lock (buffers)
+    //        {
+    //            if (buffers.Count > 0)
+    //            {
+    //                MutiThreadDisposeState x = buffers[0];
+    //                x.Reset(isvalid, iswritelock, owner);
+    //                buffers.RemoveAt(0);
+    //                return x;
+    //            }
+    //            else
+    //            {
+    //                MutiThreadDisposeState x = new MutiThreadDisposeState();
+    //                x.Reset(isvalid, iswritelock, owner);
+    //                return x;
+    //            }
+    //        }
+    //    }
 
-        internal static void MutilThreadDisposeStateToBuffer(MutiThreadDisposeState state)
-        {
-            global.ToBuffer(state);
-        }
+    //    internal void ToBuffer(MutiThreadDisposeState b)
+    //    {
+    //        lock (buffers)
+    //        {
+    //            b.Reset(false, false, null);
+    //            buffers.Add(b);
+    //        }
+    //    }
 
-        internal static void ClearGobalBuffer()
-        {
-            global.ClearBuffer();
-        }
+    //    internal void ClearBuffer()
+    //    {
+    //        lock (buffers)
+    //        {
+    //            buffers.Clear();
+    //        }
+    //    }
 
-    }
 
+    //    internal static MutiThreadDisposeState GetMutilThreadDisposeState(
+    //        bool isvalid, bool iswritelock, MutilThreadReadWriterLock owner)
+    //    {
+    //        return global.GetState(isvalid, iswritelock, owner);
+    //    }
 
+    //    internal static void MutilThreadDisposeStateToBuffer(MutiThreadDisposeState state)
+    //    {
+    //        global.ToBuffer(state);
+    //    }
+
+    //    internal static void ClearGobalBuffer()
+    //    {
+    //        global.ClearBuffer();
+    //    }
+
+    //}
+
+    #endregion
+
+    // 让函数可以随机等待一段时间后再去执行
+    // 并且在操作条件不满足时，等一段时间后再次执行
+    // 直到执行完毕或者超时跳过
     public sealed class TimeSpanWaitor
     {
         public TimeSpanWaitor(int min,int max)
         {
             asyncObject = new IntLock();
             waitTimeRandom = new Random();
-            defaultWaitTime = new TimeSpan(0, 0, 1);
+
             int tmin = min, tmax = max;
             if (tmin < 0)
                 tmin = 10;
@@ -520,16 +506,7 @@ namespace ConsoleApplicationLock
         public const int DefaultMinWaitTimeMillSeconds = 10;
 
 
-        public static readonly IDisposeState EmptyNullDisposedState;
-
-        public static readonly IDisposeState IsValidDisposedState;
-
-
-        #region Private 
-
         private IntLock asyncObject;
-
-        private TimeSpan defaultWaitTime;
 
         private Random waitTimeRandom = null;
 
@@ -537,7 +514,6 @@ namespace ConsoleApplicationLock
 
         private int minWaitMillSeconds = 0;
 
-        #endregion
 
         private PerWaitNum TryEnter(Func<bool> onEnter)
         {
@@ -545,24 +521,31 @@ namespace ConsoleApplicationLock
             if(success)
             {
                 PerWaitNum r = PerWaitNum.SuccessAndContinue;
-                Exception err = null;
+                //Exception err = null;
+                if (onEnter())
+                    r = PerWaitNum.SuccessAndExits;
+                asyncObject.UnLock();
 
-                try
-                {
-                    if (onEnter())
-                        r = PerWaitNum.SuccessAndExits;
+                #region 添加异常处理
+                //try
+                //{
+                //    if (onEnter())
+                //        r = PerWaitNum.SuccessAndExits;
 
-                }
-                catch(Exception e)
-                {
-                    err = e;
-                }
-                finally
-                {
-                    asyncObject.UnLock();
-                }
-                if (err != null)
-                    throw err;
+                //}
+                //catch(Exception e)
+                //{
+                //    err = e;
+                //}
+                //finally
+                //{
+                //    asyncObject.UnLock();
+                //}
+                //if (err != null)
+                //    throw err;
+
+                #endregion
+
                 return r;
             }
             return PerWaitNum.Fail;
@@ -602,7 +585,8 @@ namespace ConsoleApplicationLock
             return tp.Subtract(temp);
         }
 
-        //timeout最大等待时间，超出即超时
+        // timeout最大等待时间，超出即超时
+        // onEnter要执行的函数
         public bool WaitForTime(TimeSpan timeout, Func<bool> onEnter)
         {
             var temp = timeout;
@@ -620,7 +604,7 @@ namespace ConsoleApplicationLock
         }
     }
 
-
+    // 线程内保障锁的添加和移除,确保不会重复添加和移除
     internal sealed class IntLock
     {
         int radom;
@@ -643,7 +627,7 @@ namespace ConsoleApplicationLock
     }
 
 
-
+    // 委托函数执行的状态
     internal enum PerWaitNum
     {
         SuccessAndExits,
@@ -653,7 +637,8 @@ namespace ConsoleApplicationLock
     
 
 
-    // 表示状态的一个接口，用在其他对象锁定方法中的返回值
+    // 表示状态的一个接口
+    // 使用 using 语法
     public interface IDisposeState : IDisposable
     {
         bool IsValid { get; }
@@ -661,7 +646,7 @@ namespace ConsoleApplicationLock
 
 
 
-
+    // 测试代码
     class Program
     {
         static int t = 0;
@@ -742,14 +727,13 @@ namespace ConsoleApplicationLock
 
         static void Main(string[] args)
         {
-            int threadNum = 20;
-
+            int threadNum = 50;
 
             Thread[] threadreads = new Thread[threadNum];
 
             Thread[] threadwrites = new Thread[threadNum];
 
-            for(int i=0; i<threadNum;i++)
+            for (int i = 0; i < threadNum; i++)
             {
                 threadreads[i] = new Thread(TestRead);
                 threadwrites[i] = new Thread(TestWrite);
@@ -761,16 +745,16 @@ namespace ConsoleApplicationLock
                 threadwrites[i].Start();
             }
 
-            //Thread[] threads = new Thread[threadNum];
-            //for (int i = 0; i < threadNum; i++)
-            //{
-            //    threads[i] = new Thread(Test);
-            //}
+            Thread[] threads = new Thread[threadNum];
+            for (int i = 0; i < threadNum; i++)
+            {
+                threads[i] = new Thread(Test);
+            }
 
-            //for (int i = 0; i < threadNum; i++)
-            //{
-            //    threads[i].Start();
-            //}
+            for (int i = 0; i < threadNum; i++)
+            {
+                threads[i].Start();
+            }
 
             Console.WriteLine();
            
